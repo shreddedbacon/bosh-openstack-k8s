@@ -20,16 +20,6 @@ git submodule update
 
 ### Step 2
 
-Build the docker image that is required for the `deploy` command
-
-```
-./deploy build
-## or pull it
-docker pull shreddedbacon/openstack-ansible
-```
-
-### Step 3
-
 Copy the .envrc-example to .envrc
 
 ```
@@ -50,6 +40,16 @@ Then allow `direnv` to run in the root of the repo
 
 ```
 direnv allow
+```
+
+### Step 3
+
+Build the docker image that is required for the `deploy` command
+
+```
+./deploy build
+## or pull it
+docker pull shreddedbacon/openstack-ansible
 ```
 
 Once that is set up, it may complain a bit or download some extra utils for BOSH
@@ -133,7 +133,7 @@ direnv allow
 
 ### Step 10
 
-We can't install k8s without the right stemcell, lets upload it now. This will upload the image into openstack via the directon, and then our director will know which images it can use for deploying its VMs
+We can't install k8s without the right stemcell, lets upload it now. This will upload the image into openstack via the director, and then our director will know which images it can use for deploying its VMs
 
 ```
 ./deploy kubo-stemcell

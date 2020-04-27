@@ -8,21 +8,24 @@ done
 
 echoerr() { echo "$@" 1>&2; }
 
-OPENSTACK_PROJECT_NAME=$(bosh int openstack-setup/config.yml --path /project/name)
-JUMPBOX_NETWORK=$(bosh int openstack-setup/config.yml --path /jumpbox/network)
-JUMPBOX_NETWORK_SUBNET=$(bosh int openstack-setup/config.yml --path /jumpbox/subnet)
-JUMPBOX_INTERNAL_IP=$(bosh int openstack-setup/config.yml --path /jumpbox/internal_ip)
-JUMPBOX_SECURITY_GROUPS=$(bosh int openstack-setup/config.yml --path /jumpbox/security_groups)
 
-BOSH_NETWORK=$(bosh int openstack-setup/config.yml --path /bosh/network)
-BOSH_NETWORK_SUBNET=$(bosh int openstack-setup/config.yml --path /bosh/subnet)
-BOSH_INTERNAL_IP=$(bosh int openstack-setup/config.yml --path /bosh/internal_ip)
-BOSH_DIRECTOR_ALIAS=$(bosh int openstack-setup/config.yml --path /bosh/bosh_alias)
-DIRECTOR_ALIAS=$BOSH_DIRECTOR_ALIAS
-BOSH_DIRECTOR_NAME=$(bosh int openstack-setup/config.yml --path /bosh/director_name)
-FLY_TARGET_ALIAS=$(bosh int openstack-setup/config.yml --path /bosh/fly_target)
+if command -v bosh; then
+  OPENSTACK_PROJECT_NAME=$(bosh int openstack-setup/config.yml --path /project/name)
+  JUMPBOX_NETWORK=$(bosh int openstack-setup/config.yml --path /jumpbox/network)
+  JUMPBOX_NETWORK_SUBNET=$(bosh int openstack-setup/config.yml --path /jumpbox/subnet)
+  JUMPBOX_INTERNAL_IP=$(bosh int openstack-setup/config.yml --path /jumpbox/internal_ip)
+  JUMPBOX_SECURITY_GROUPS=$(bosh int openstack-setup/config.yml --path /jumpbox/security_groups)
 
-GEN_KEYPAIR_NAME=bosh-${OPENSTACK_PROJECT_NAME}
+  BOSH_NETWORK=$(bosh int openstack-setup/config.yml --path /bosh/network)
+  BOSH_NETWORK_SUBNET=$(bosh int openstack-setup/config.yml --path /bosh/subnet)
+  BOSH_INTERNAL_IP=$(bosh int openstack-setup/config.yml --path /bosh/internal_ip)
+  BOSH_DIRECTOR_ALIAS=$(bosh int openstack-setup/config.yml --path /bosh/bosh_alias)
+  DIRECTOR_ALIAS=$BOSH_DIRECTOR_ALIAS
+  BOSH_DIRECTOR_NAME=$(bosh int openstack-setup/config.yml --path /bosh/director_name)
+  FLY_TARGET_ALIAS=$(bosh int openstack-setup/config.yml --path /bosh/fly_target)
+
+  GEN_KEYPAIR_NAME=bosh-${OPENSTACK_PROJECT_NAME}
+fi
 
 build () {
 	docker build -t shreddedbacon/openstack-ansible -f Dockerfile.deploy .
