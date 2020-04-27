@@ -1,0 +1,5 @@
+{% for lb in k8s_loadbalancers %}
+- type: replace
+  path: /instance_groups/name={{lb.instance_group}}/vm_extensions?/-
+  value: {{lb.name}}
+{% endfor %}

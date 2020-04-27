@@ -1,0 +1,103 @@
+## all azs will be nova
+azs:
+{% for az in azs %}
+  - name: {{az.name}}
+    cloud_properties: {{az.cloud_properties|to_json}}
+{% endfor %}
+
+## define all our vm types
+vm_types:
+{% for vm_type in vm_types %}
+  - name: {{vm_type.name}}
+    cloud_properties: {{vm_type.cloud_properties|to_json}}
+{% endfor %}
+
+vm_extensions:
+{% for sg in sg_facts %}
+  - name: {{sg.Name}}
+    cloud_properties:
+      security_groups: [{{sg.ID}}]
+{% endfor %}
+
+{% for lb in k8s_loadbalancers %}
+  - name: {{ lb.name}}
+    cloud_properties:
+      loadbalancer_pools:
+{% for pool in lb.pools %}
+        - name: {{ pool.name }}
+          port: {{ pool.port}}
+{% endfor %}
+{% endfor %}
+
+disk_types:
+{% for disk in disk_types %}
+  - name: {{disk.name}}
+    disk_size: {{disk.disk_size}}
+    cloud_properties: {{disk.cloud_properties|to_json}}
+{% endfor %}
+
+networks:
+  # Define DEFAULT network based on default tag
+{% for network in net_facts %}
+{% for tag in network.Tags %}
+{% set tagitem1,tagitem2 = tag.split(':') %}
+{% if tagitem1 == "default" %}
+{% if tagitem2 == "True" %}
+  - name: default
+{% else %}
+  - name: {{network.Name}}
+{% endif %}
+{% endif %}
+{% endfor %}
+    type: manual
+    subnets:
+{% for subnet in subnet_facts %}
+{% set ns = namespace(cidr="", gateway="", dns="", reserved="", azs="", securitygroups="") %}
+{% for tag in subnet.Tags %}
+{% set tagitem1,tagitem2 = tag.split(':') %}
+{% if tagitem1 == "cidr" %}
+{% set ns.cidr = tagitem2.strip('"') %}
+{% endif %}
+{% if tagitem1 == "gw" %}
+{% set ns.gateway = tagitem2.strip('"') %}
+{% endif %}
+{% if tagitem1 == "dns" %}
+{% set ns.dns = tagitem2.strip('"') %}
+{% endif %}
+{% if tagitem1 == "reserved" %}
+{% set ns.reserved = tagitem2.strip('"') %}
+{% endif %}
+{% if tagitem1 == "azs" %}
+{% set ns.azs = tagitem2.strip('"') %}
+{% endif %}
+{% if tagitem1 == "securitygroups" %}
+{% set ns.securitygroups = tagitem2.strip('"') %}
+{% endif %}
+{% endfor %}
+      - range: {{ns.cidr}}
+        gateway: {{ns.gateway}}
+        dns: {{ns.dns}}
+        azs: {{ns.azs}}
+        reserved: {{ns.reserved}}
+        cloud_properties:
+          net_id: {{network.ID}}
+          security_groups:
+{% for sg1 in ns.securitygroups.split(',') %}
+{% for sg2 in sg_facts %}
+{% if sg1.strip('[').strip(']').strip(' ') == sg2.Name %}
+            - {{sg2.ID}}
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+  # Define VIP network
+  - name: vip
+    type: vip
+
+compilation:
+  workers: {{ compilation.workers }}
+  reuse_compilation_vms: {{ compilation.reuse_compilation_vms }}
+  az: {{ compilation.az }}
+  vm_type: {{ compilation.vm_type }}
+  network: {{ compilation.network }}

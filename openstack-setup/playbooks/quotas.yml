@@ -1,0 +1,18 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  vars_files:
+    - ../config.yml
+
+  tasks:
+    - name: quotas
+      os_quota:
+        name: "{{item.name}}"
+        cores: "{{item.cores}}"
+        ram: "{{item.ram}}"
+        volumes: "{{item.volumes}}"
+        gigabytes: "{{item.gigabytes}}"
+      with_items:
+        - "{{quotas}}"

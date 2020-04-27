@@ -1,0 +1,33 @@
+---
+- include: playbooks/project.yml
+  tags:
+    - all
+    - project
+- include: playbooks/users.yml
+  tags:
+    - all
+    - users
+- include: playbooks/security_groups.yml
+  tags:
+    - all
+    - security_groups
+- include: playbooks/networks.yml
+  tags:
+    - all
+    - networks
+- include: playbooks/routers.yml
+  tags:
+    - all
+    - routers
+- include: playbooks/quotas.yml
+  tags:
+    - all
+    - quotas
+- include: playbooks/load_balancers.yml
+  tags:
+    - all
+    - load_balancers
+- include: playbooks/bosh_config.yml
+  tags:
+    - all
+    - bosh

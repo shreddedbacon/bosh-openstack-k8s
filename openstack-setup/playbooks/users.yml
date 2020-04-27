@@ -1,0 +1,47 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  vars_files:
+    - ../config.yml
+
+  tasks:
+    - name: new group
+      os_group:
+        state: present
+        name: "{{project.group}}"
+        description: "user group for {{project.name}}"
+        domain_id: default
+
+    - name: new user
+      os_user:
+        state: present
+        name: "{{item.name}}"
+        password: "{{item.password}}"
+        update_password: on_create
+        domain: default
+        default_project: "{{project.name}}"
+      with_items:
+        - "{{users}}"
+
+    - name: user in group
+      os_user_group:
+        user: "{{item.name}}"
+        group: "{{project.group}}"
+      with_items:
+        - "{{users}}"
+
+    - name: user role
+      os_user_role:
+        state: present
+        group: "{{project.group}}"
+        role: _member_
+        project: "{{project.name}}"
+
+    - name: admin
+      os_user_role:
+        state: present
+        user: admin
+        role: admin
+        project: "{{project.name}}"

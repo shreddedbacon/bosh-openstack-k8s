@@ -1,0 +1,27 @@
+unset OS_SERVICE_TOKEN
+
+# OPENSTACK ADMIN CREDENTIALS
+export OS_PROJECT_DOMAIN_NAME=Default
+export OS_USER_DOMAIN_NAME=Default
+export OS_REGION_NAME=RegionOne
+export OS_PROJECT_NAME=admin
+export OS_TENANT_NAME=admin
+export OS_USERNAME=admin
+export OS_PASSWORD=secretadminpassword
+export OS_AUTH_URL=http://your.openstack.url:5000/v3
+export OS_INTERFACE=internal
+export OS_IDENTITY_API_VERSION=3
+export OS_AUTH_PLUGIN=password
+export OS_AZ=nova
+
+SOCKS_PORT=9998
+if command -v bosh; then
+SOCKS_PORT=$(bosh int openstack-setup/config.yml --path /socks/port)
+fi
+
+# BUCC
+export BUCC_PROJECT_ROOT=./bucc-root/
+export BOSH_ALL_PROXY=socks5://localhost:$SOCKS_PORT
+export CREDHUB_PROXY=socks5://localhost:$SOCKS_PORT
+
+eval "$(./bucc/bin/bucc env)"

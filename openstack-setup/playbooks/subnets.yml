@@ -1,0 +1,26 @@
+- name: subnets
+  os_subnet:
+    state: present
+    network_name: "{{source_item.name}}"
+    name: "{{item.name}}"
+    cidr: "{{item.cidr}}"
+    dns_nameservers: "{{item.dns_nameservers}}"
+    project: "{{project.name}}"
+    allocation_pool_start: "{{item.allocation_pool_start}}"
+    allocation_pool_end: "{{item.allocation_pool_end}}"
+  loop: "{{source_item.subnets}}"
+
+- name: tag subnets
+  shell: |
+    openstack subnet set \
+      --tag project:{{project.name}} \
+      --tag cidr:{{item.cidr}} \
+      --tag gw:{{item.gateway}} \
+      --tag "dns:{{item.dns_nameservers|to_json}}" \
+      --tag "reserved:{{item.reserved_ips|to_json}}" \
+      --tag network:{{source_item.name}} \
+      --tag "azs:{{item.azs|to_json}}" \
+      --tag "securitygroups:{{item.security_groups|to_json}}" \
+      --tag default:{{item.default | default("False")}} \
+      {{item.name}}
+  loop: "{{source_item.subnets}}"

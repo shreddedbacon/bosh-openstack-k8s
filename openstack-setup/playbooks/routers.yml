@@ -1,0 +1,19 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  vars_files:
+    - ../config.yml
+
+  tasks:
+    - name: routers
+      os_router:
+        project: "{{project.name}}"
+        state: present
+        name: "{{item.name}}"
+        network: "{{item.network}}"
+        interfaces: '{{item.interfaces | default("")}}'
+      with_items:
+        - "{{routers}}"
+      ignore_errors: true

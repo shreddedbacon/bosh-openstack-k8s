@@ -1,0 +1,48 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  vars_files:
+    - ../config.yml
+
+  tasks:
+    - name: internal networks
+      os_network: #'{{item}}'
+        state: "{{item.state}}"
+        name: "{{item.name}}"
+        external: "{{item.external}}"
+        shared: "{{item.shared}}"
+        project: "{{project.name}}"
+        provider_network_type: "{{item.provider_network_type}}"
+        provider_physical_network: "{{item.provider_physical_network}}"
+        provider_segmentation_id: "{{item.provider_segmentation_id}}"
+      when: item.provider_network_type is defined and item.provider_physical_network is defined and item.provider_segmentation_id is defined
+      with_items:
+        - "{{internal_networks}}"
+
+    - name: internal networks
+      os_network: #'{{item}}'
+        state: "{{item.state}}"
+        name: "{{item.name}}"
+        external: "{{item.external}}"
+        shared: "{{item.shared}}"
+        project: "{{project.name}}"
+      when: item.provider_network_type is not defined and item.provider_physical_network is not defined and item.provider_segmentation_id is not defined
+      with_items:
+        - "{{internal_networks}}"
+
+    - name: tag networks
+      shell: |
+        openstack network set \
+          --tag project:{{project.name}} \
+          --tag default:{{item.default | default("False")}} \
+          {{item.name}}
+      with_items:
+        - "{{internal_networks}}"
+
+    - name: internal subnets
+      include_tasks: subnets.yml
+      loop: "{{internal_networks}}"
+      loop_control:
+        loop_var: source_item

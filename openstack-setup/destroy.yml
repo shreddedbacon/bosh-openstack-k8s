@@ -1,0 +1,262 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  vars_files:
+    - config.yml
+  tasks:
+    - name: get lb facts
+      shell: |
+        openstack loadbalancer list --project {{project.name}} --name {{item.name}} -f json | jq -r '.[] | .id'
+      register: delete_loadbalancers
+      with_items:
+        - "{{load_balancers}}"
+
+    - debug:
+        msg: "{{item.stdout}}"
+      with_items:
+        - "{{delete_loadbalancers.results}}"
+
+    - name: destroy lbs
+      shell: |
+        openstack loadbalancer delete --cascade --wait {{item.stdout}}
+      when: item.stdout != ""
+      with_items:
+        - "{{delete_loadbalancers.results}}"
+
+    - pause:
+        minutes: 1
+
+    - name: get floating ips
+      shell: |
+        openstack floating ip list --project {{project.name}} -f json
+      register: delete_floating
+
+    - debug:
+        msg: "{{item.ID}}"
+      with_items:
+        - "{{delete_floating.stdout}}"
+
+    - name: destroy floating
+      shell: |
+        openstack floating ip delete {{item.ID}}
+      when: item.ID != ""
+      with_items:
+        - "{{delete_floating.stdout}}"
+
+    - name: get routers
+      shell: |
+        openstack router list --project {{project.name}} -f json
+      register: delete_router
+
+    - set_fact:
+        delete_router_ids: "{{item}}"
+      with_items:
+        - "{{delete_router.stdout}}"
+
+    - name: unset gateway
+      shell: |
+        openstack router unset --external-gateway {{item.ID}}
+      when: item.ID != ""
+      ignore_errors: true
+      with_items:
+        - "{{delete_router_ids}}"
+
+    - name: destroy delete_router
+      shell: |
+        openstack router show {{item.ID}} -f json
+      register: delete_router_ports
+      ignore_errors: true
+      with_items:
+        - "{{delete_router_ids}}"
+
+    - set_fact:
+        delete_router_ports_final: "{{item.stdout}}"
+      ignore_errors: true
+      with_items:
+        - "{{delete_router_ports.results}}"
+
+    - name: destroy delete_router_ports
+      debug:
+        msg: "{{item.id}} {{item.interfaces_info}}"
+      ignore_errors: true
+      with_items:
+        - "{{ delete_router_ports_final }}"
+
+    - name: destroy delete_router_ports
+      shell: |
+        R_PORTS=$(echo '{{item.interfaces_info|to_json}}' | jq -r '.[] | .subnet_id')
+        for R_PORT in $R_PORTS
+        do
+            openstack router remove subnet {{item.id}} $R_PORT
+        done
+      args:
+        executable: /bin/bash
+      register: router_ports
+      ignore_errors: true
+      with_items:
+        - "{{ delete_router_ports_final }}"
+
+    - name: destroy delete_router_ports
+      debug:
+        msg: "{{item}}"
+      ignore_errors: true
+      with_items:
+        - "{{ router_ports }}"
+
+    - name: destroy delete_router
+      shell: |
+        openstack router delete {{item.ID}}
+      when: item.ID != ""
+      ignore_errors: true
+      with_items:
+        - "{{delete_router.stdout}}"
+
+    - name: get network ports
+      shell: |
+        openstack port list --project {{project.name}} -f json
+      register: delete_ports
+      ignore_errors: true
+
+    - debug:
+        msg: "{{item.ID}}"
+      ignore_errors: true
+      with_items:
+        - "{{delete_ports.stdout}}"
+
+    - name: destroy delete_ports
+      shell: |
+        openstack port delete {{item.ID}}
+      when: item.ID != ""
+      ignore_errors: true
+      with_items:
+        - "{{delete_ports.stdout}}"
+
+    - name: get subnets
+      shell: |
+        openstack subnet list --project {{project.name}} -f json
+      register: delete_subnet
+
+    - debug:
+        msg: "{{item.ID}}"
+      with_items:
+        - "{{delete_subnet.stdout}}"
+
+    - name: destroy delete_subnet
+      shell: |
+        openstack subnet delete {{item.ID}}
+      when: item.ID != ""
+      with_items:
+        - "{{delete_subnet.stdout}}"
+
+    - name: get networks
+      shell: |
+        openstack network list --project {{project.name}} -f json
+      register: delete_network
+
+    - debug:
+        msg: "{{item.ID}}"
+      with_items:
+        - "{{delete_network.stdout}}"
+
+    - name: destroy delete_network
+      shell: |
+        openstack network delete {{item.ID}}
+      when: item.ID != ""
+      with_items:
+        - "{{delete_network.stdout}}"
+
+    - name: get security groups
+      shell: |
+        openstack security group list --project {{project.name}} -f json
+      register: delete_security_groups
+
+    - debug:
+        msg: "{{item.ID}}"
+      with_items:
+        - "{{delete_security_groups.stdout}}"
+
+    - name: destroy delete_security_groups
+      shell: |
+        openstack security group delete {{item.ID}}
+      when: item.ID != "" and item.Name != "default"
+      with_items:
+        - "{{delete_security_groups.stdout}}"
+
+    - name: get volumes
+      shell: |
+        openstack volume list --project {{project.name}} -f json
+      register: delete_volumes
+
+    - debug:
+        msg: "{{item.ID}}"
+      with_items:
+        - "{{delete_volumes.stdout}}"
+
+    - name: destroy delete_volumes
+      shell: |
+        openstack volume delete {{item.ID}}
+      when: item.ID != ""
+      with_items:
+        - "{{delete_volumes.stdout}}"
+
+    - name: get project id
+      shell: |
+        P_ID=$(openstack project list --tags project:{{project.name}} -f json | jq -r '.[] | .ID')
+        echo $P_ID
+      args:
+        executable: /bin/bash
+      register: project_id
+
+    - name: get images
+      shell: |
+        IMAGE_IDS=$(openstack image list -f json | jq -r '.[] | .ID')
+        echo $IMAGE_IDS
+      args:
+        executable: /bin/bash
+      register: list_images
+
+    - debug:
+        msg: "{{item}}"
+      with_items:
+        - "{{list_images.stdout}}"
+
+    - name: get images
+      shell: |
+        IMAGE_IDS="{{item}}"
+        for IMAGE_ID in $IMAGE_IDS
+        do
+            IMAGE_OWNER=$(openstack image show $IMAGE_ID -f json | jq -r '.owner')
+            if [ "$IMAGE_OWNER" == "{{project_id.stdout}}" ]; then
+                echo "$IMAGE_ID"
+            fi
+        done
+      args:
+        executable: /bin/bash
+      register: list_images_deleted
+      with_items:
+        - "{{list_images.stdout}}"
+
+    - debug:
+        msg: "{{item.stdout}}"
+      with_items:
+        - "{{list_images_deleted.results}}"
+
+    - name: destroy delete_volumes
+      shell: |
+        IMAGE_IDS="{{item.stdout}}"
+        for IMAGE_ID in $IMAGE_IDS
+        do
+            openstack image delete ${IMAGE_ID}
+        done
+      args:
+        executable: /bin/bash
+      register: list_images_deleted2
+      with_items:
+        - "{{list_images_deleted.results}}"
+
+    - debug:
+        msg: "{{item.stdout}}"
+      with_items:
+        - "{{list_images_deleted2.results}}"

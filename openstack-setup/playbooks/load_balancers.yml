@@ -1,0 +1,80 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  vars_files:
+    - ../config.yml
+  tasks:
+    - name: get floating ip
+      shell: |
+        EXISTING_IP=$(openstack floating ip list --project {{project.name}} --tag lb:{{item.name}} -f json | jq -r '.[] | ."Floating IP Address"')
+        if [ "$EXISTING_IP" == "" ]; then
+          EXISTING_IP=$(openstack floating ip create --project {{project.name}} {{item.public_network}} \
+              --description lb:{{item.name}} \
+              --tag lb:{{item.name}} \
+              -f json | jq -r '.floating_ip_address')
+        fi
+        echo $EXISTING_IP
+      args:
+        executable: /bin/bash
+      register: loadbalancer_ip_check
+      with_items:
+        - "{{load_balancers}}"
+
+    - name: get net id
+      shell: |
+        NET_ID=$(openstack network list --name {{item.public_network}} -f json | jq -r '.[] | ."ID"')
+        echo $NET_ID
+      args:
+        executable: /bin/bash
+      register: loadbalancer_net_id
+      with_items:
+        - "{{load_balancers}}"
+
+    - name: debug floating ip
+      debug:
+        msg: "{{item.0.name}}
+        {{item.0.public_network}}
+        {{item.1.stdout}}
+        {{item.2.stdout}}"
+      loop: "{{ load_balancers|zip(loadbalancer_ip_check.results,loadbalancer_net_id.results)|list }}"
+
+    - name: create loadbalancers
+      os_loadbalancer:
+        auth: "{{auth}}"
+        name: "{{item.0.name}}"
+        state: present
+        vip_subnet: "{{item.0.vip_subnet}}"
+        auto_public_ip: "{{item.0.auto_public_ip}}"
+        listeners: "{{item.0.listeners}}"
+        wait: "{{item.0.wait}}"
+        timeout: "{{item.0.timeout}}"
+      loop: "{{ load_balancers|zip(loadbalancer_ip_check.results,loadbalancer_net_id.results)|list }}"
+
+    - name: get vip port id
+      shell: |
+        LB_ID=$(openstack loadbalancer list --project {{project.name}} --name {{item.name}} -f json | jq -r '.[] | .id')
+        PORT_ID=$(openstack loadbalancer show $LB_ID -f json | jq -r '.vip_port_id')
+        echo $PORT_ID
+      args:
+        executable: /bin/bash
+      register: loadbalancer_vip_port_id
+      with_items:
+        - "{{load_balancers}}"
+
+    - name: debug floating ip
+      debug:
+        msg: "{{item.0.name}}
+        {{item.0.public_network}}
+        {{item.1.stdout}}
+        {{item.2.stdout}}
+        {{item.3.stdout}}"
+      loop: "{{ load_balancers|zip(loadbalancer_ip_check.results,loadbalancer_net_id.results,loadbalancer_vip_port_id.results)|list }}"
+
+    - name: allocate vip
+      shell: |
+        openstack floating ip set --port {{item.3.stdout}} {{item.1.stdout}}
+      args:
+        executable: /bin/bash
+      loop: "{{ load_balancers|zip(loadbalancer_ip_check.results,loadbalancer_net_id.results,loadbalancer_vip_port_id.results)|list }}"

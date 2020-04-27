@@ -1,0 +1,18 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  vars_files:
+    - ../config.yml
+
+  tasks:
+    - name: new project
+      os_project:
+        state: present
+        name: "{{project.name}}"
+        description: "project for {{project.name}}"
+        enabled: true
+        domain_id: Default
+    - name: tag project
+      shell: "openstack project set --tag project:{{project.name}} {{project.name}}"

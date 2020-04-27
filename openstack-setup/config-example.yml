@@ -1,0 +1,304 @@
+##############################################################################
+#
+#  the project name in openstack
+project:
+  name: k8s-bucc
+  group: k8s-bucc
+
+socks:
+  port: 9998
+##############################################################################
+#
+#  the project name in openstack
+#  leave these
+auth:
+  auth_url: "{{ lookup('env', 'OS_AUTH_URL') }}"
+  username: "{{ lookup('env', 'OS_USERNAME')}}"
+  password: "{{ lookup('env', 'OS_PASSWORD') }}"
+  project_name: "{{project.name}}"
+
+##############################################################################
+#
+#  the project quotas in openstack, adjust if you want
+quotas:
+  - name: "{{project.name}}"
+    ram: 51200
+    cores: 40
+    volumes: 100
+    gigabytes: 2000
+
+##############################################################################
+#
+#   This user will be created, you can use it once the iaas is provisioned instead of using admin if you want
+users:
+  - name: k8s-user
+    password: 23a1792d7c09d5ece0ea297ca849ce14e7d61ae6
+
+##############################################################################
+#
+#   This section is where you configure your k8s specific information
+#
+#   api_loadbalancer_name should be the name of the loadbalancer that is defined in the `load_balancers` section near the bottom of this config file
+#   api_loadbalancer_port is the port you want to expose in k8s and on the LB for the k8s API
+#   http_ingress_port is the port you want to expose in k8s and on the listener on the LB for HTTP ingress
+#   https_ingress_port is the port you want to expose in k8s and on the listener on the LB for HTTPS ingress
+#
+k8s:
+  api_loadbalancer_name: k8s
+  api_loadbalancer_port: 8443
+  http_ingress_port: 32080
+  https_ingress_port: 32443
+  worker_count: 3
+  worker_vm_type: small-highmem
+  master_vm_type: small
+
+##############################################################################
+#
+#   k8s loadbalancer definition
+#
+#   bosh CPI doesn't let you have 2 loadbalancer vm extensions attached to a instance group
+#   so we have to re-craft our loadbalancer definitions here, the core loadbalancer and tags etc still need
+#   to be defined in the `load_balancers` section below, but these are used for generating the cloud-config and vm-extensions used for kubo
+k8s_loadbalancers:
+  - name: kubo-worker
+    instance_group: worker
+    pools:
+      - name: k8s-workers-https
+        port: "{{k8s.https_ingress_port}}"
+      - name: k8s-workers-http
+        port: "{{k8s.http_ingress_port}}"
+  - name: kubo-master
+    instance_group: master
+    pools:
+      - name: k8s-masters
+        port: "{{k8s.api_loadbalancer_port}}"
+
+##############################################################################
+#
+#   jumpbox configuration
+#   The jumpbox is used to access the bosh director and have it do deployments for you
+#
+#   floating_ip_net is the external network in openstack that you want to expose the jumpbox to for SSH
+#   internal_ip is the static ip to assign the jumpbox inside the tenant network defined in `network` and `subnet
+#   the security groups are also defined below
+#
+#   you only really need to update the IP address to the subnet you want to use for your internal network defined below
+jumpbox:
+  floating_ip_net: extnet3
+  internal_ip: 10.20.1.10
+  network: k8snet01
+  subnet: k8ssub01
+  security_groups: [jumpbox, k8s-node]
+
+##############################################################################
+#
+#   bosh director configuration
+#
+#   you only really need to update the IP address to the subnet you want to use for your internal network defined below
+#   if you change `bosh_alias` change all of them to match for consistency
+bosh:
+  network: k8snet01
+  subnet: k8ssub01
+  internal_ip: 10.20.1.11
+  bosh_alias: k8s-bucc
+  director_name: k8s-bucc
+  fly_target: k8s-bucc
+  vm_type: m1.small
+##############################################################################
+#
+#   internal networks
+#
+#   you only really need to update the subnet you want to use for your internal network defined below,
+#   you can remove the `provider_*` options if you want openstack to handle this
+internal_networks:
+  - name: k8snet01
+    external: False
+    state: present
+    shared: no
+    project: "{{project.name}}"
+    provider_network_type: vlan
+    provider_physical_network: physnet1
+    provider_segmentation_id: 810
+    default: true
+    subnets:
+      - name: k8ssub01
+        default: true
+        cidr: 10.20.1.0/24
+        azs:
+          - "z1"
+          - "z2"
+          - "z3"
+        gateway: 10.20.1.1
+        allocation_pool_start: 10.20.1.26
+        allocation_pool_end: 10.20.1.40
+        security_groups: [k8s-node, jumpbox]
+        reserved_ips:
+          - 10.20.1.1/30
+          - 10.20.1.2-10.20.1.40
+        dns_nameservers:
+          - 10.1.3.254
+
+##############################################################################
+#
+#   you don't need to adjust anything below here unless you want to explore and maybe break things
+security_groups:
+  - name: k8s-node
+    description: "node to node comms"
+    rules:
+      - protocol: icmp
+        port_range_min: -1
+        port_range_max: -1
+        remote_group: k8s-node
+      - protocol: tcp
+        port_range_min: -1
+        port_range_max: -1
+        remote_group: k8s-node
+      - protocol: udp
+        port_range_min: -1
+        port_range_max: -1
+        remote_group: k8s-node
+      - protocol: tcp
+        port_range_min: "{{k8s.api_loadbalancer_port}}"
+        port_range_max: "{{k8s.api_loadbalancer_port}}"
+        remote_ip_prefix: 10.20.1.0/24
+        description: k8s-api
+      - protocol: tcp
+        port_range_min: "{{k8s.http_ingress_port}}"
+        port_range_max: "{{k8s.http_ingress_port}}"
+        remote_ip_prefix: 10.20.1.0/24
+      - protocol: tcp
+        port_range_min: "{{k8s.https_ingress_port}}"
+        port_range_max: "{{k8s.https_ingress_port}}"
+        remote_ip_prefix: 10.20.1.0/24
+  - name: jumpbox
+    description: "jumpbox comms"
+    rules:
+      - protocol: tcp
+        port_range_min: 22
+        port_range_max: 22
+        remote_ip_prefix: 0.0.0.0/0
+      - protocol: tcp
+        port_range_min: 6868
+        port_range_max: 6868
+        remote_ip_prefix: 0.0.0.0/0
+      - protocol: icmp
+        port_range_min: -1
+        port_range_max: -1
+        remote_ip_prefix: 0.0.0.0/0
+
+routers:
+  - name: bosh-router
+    network: extnet3
+    external_fixed_ips:
+      - subnet: extsubnet3
+    interfaces:
+      - k8ssub01
+
+load_balancers:
+  - name: k8s
+    vip_subnet: k8ssub01
+    auto_public_ip: no
+    public_network: extnet3
+    wait: yes
+    timeout: 6000
+    # hostname: www.my.k8s.com
+    listeners:
+      - name: k8s-api
+        protocol: TCP
+        protocol_port: "{{k8s.api_loadbalancer_port}}"
+        k8s_node_port: "{{k8s.api_loadbalancer_port}}"
+        security_groups: [k8s-node]
+        pool:
+          name: k8s-masters
+          protocol: TCP
+        tags:
+          instance_group: master
+      - name: k8s-ingress-http
+        protocol: TCP
+        protocol_port: 80
+        k8s_node_port: "{{k8s.http_ingress_port}}"
+        security_groups: [k8s-node]
+        pool:
+          name: k8s-workers-http
+          protocol: TCP
+        tags:
+          instance_group: worker
+      - name: k8s-ingress-https
+        protocol: TCP
+        protocol_port: 443
+        k8s_node_port: "{{k8s.https_ingress_port}}"
+        security_groups: [k8s-node]
+        pool:
+          name: k8s-workers-https
+          protocol: TCP
+        tags:
+          instance_group: worker
+
+## these are used by bosh to associate a friendly name to an instance type in openstack
+vm_types:
+  - name: minimal
+    cloud_properties: { "instance_type": "m1.micro" }
+  - name: small
+    cloud_properties: { "instance_type": "m1.micro" }
+  - name: small-highmem
+    cloud_properties: { "instance_type": "m2.micro" }
+  - name: default
+    cloud_properties: { "instance_type": "m1.micro" }
+  - name: m1.nano
+    cloud_properties: { "instance_type": "m1.nano" }
+  - name: m1.tiny
+    cloud_properties: { "instance_type": "m1.tiny" }
+  - name: m1.micro
+    cloud_properties: { "instance_type": "m1.micro" }
+  - name: m1.small
+    cloud_properties: { "instance_type": "m1.small" }
+  - name: m1.medium
+    cloud_properties: { "instance_type": "m1.medium" }
+  - name: m1.large
+    cloud_properties: { "instance_type": "m1.large" }
+  - name: m1.xlarge
+    cloud_properties: { "instance_type": "m1.xlarge" }
+  - name: m2.nano
+    cloud_properties: { "instance_type": "m2.nano" }
+  - name: m2.tiny
+    cloud_properties: { "instance_type": "m2.tiny" }
+  - name: m2.micro
+    cloud_properties: { "instance_type": "m2.micro" }
+  - name: m2.small
+    cloud_properties: { "instance_type": "m2.small" }
+
+disk_types:
+  - name: default
+    disk_size: 1024
+    cloud_properties: { "type": "nfs" }
+  - name: micro
+    disk_size: 5120
+    cloud_properties: { "type": "nfs" }
+  - name: small
+    disk_size: 10240
+    cloud_properties: { "type": "nfs" }
+  - name: medium
+    disk_size: 20480
+    cloud_properties: { "type": "nfs" }
+  - name: large
+    disk_size: 30720
+    cloud_properties: { "type": "nfs" }
+
+compilation:
+  workers: 2
+  reuse_compilation_vms: True
+  az: z1
+  vm_type: default
+  network: default
+
+## all azs will be nova openstack
+azs:
+  - name: z1
+    cloud_properties:
+      availability_zone: nova
+  - name: z2
+    cloud_properties:
+      availability_zone: nova
+  - name: z3
+    cloud_properties:
+      availability_zone: nova

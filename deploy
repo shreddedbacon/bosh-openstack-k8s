@@ -1,0 +1,340 @@
+#!/bin/bash
+
+commands="yq jq"
+for cmd in $commands
+do
+  command -v $cmd >/dev/null 2>&1 || { echo >&2 "I require $cmd but it's not installed.  Aborting."; exit 1; }
+done
+
+echoerr() { echo "$@" 1>&2; }
+
+OPENSTACK_PROJECT_NAME=$(bosh int openstack-setup/config.yml --path /project/name)
+JUMPBOX_NETWORK=$(bosh int openstack-setup/config.yml --path /jumpbox/network)
+JUMPBOX_NETWORK_SUBNET=$(bosh int openstack-setup/config.yml --path /jumpbox/subnet)
+JUMPBOX_INTERNAL_IP=$(bosh int openstack-setup/config.yml --path /jumpbox/internal_ip)
+JUMPBOX_SECURITY_GROUPS=$(bosh int openstack-setup/config.yml --path /jumpbox/security_groups)
+
+BOSH_NETWORK=$(bosh int openstack-setup/config.yml --path /bosh/network)
+BOSH_NETWORK_SUBNET=$(bosh int openstack-setup/config.yml --path /bosh/subnet)
+BOSH_INTERNAL_IP=$(bosh int openstack-setup/config.yml --path /bosh/internal_ip)
+BOSH_DIRECTOR_ALIAS=$(bosh int openstack-setup/config.yml --path /bosh/bosh_alias)
+DIRECTOR_ALIAS=$BOSH_DIRECTOR_ALIAS
+BOSH_DIRECTOR_NAME=$(bosh int openstack-setup/config.yml --path /bosh/director_name)
+FLY_TARGET_ALIAS=$(bosh int openstack-setup/config.yml --path /bosh/fly_target)
+
+GEN_KEYPAIR_NAME=bosh-${OPENSTACK_PROJECT_NAME}
+
+build () {
+	docker build -t shreddedbacon/openstack-ansible -f Dockerfile.deploy .
+}
+
+os-ansible () {
+	docker run \
+    -e OS_PROJECT_DOMAIN_NAME=$OS_PROJECT_DOMAIN_NAME \
+    -e OS_USER_DOMAIN_NAME=$OS_USER_DOMAIN_NAME \
+    -e OS_REGION_NAME=$OS_REGION_NAME \
+    -e OS_PROJECT_NAME=$OS_PROJECT_NAME \
+    -e OS_TENANT_NAME=$OS_TENANT_NAME \
+    -e OS_USERNAME=$OS_USERNAME \
+    -e OS_PASSWORD=$OS_PASSWORD \
+    -e OS_AUTH_URL=$OS_AUTH_URL \
+    -e OS_INTERFACE=$OS_INTERFACE \
+    -e OS_IDENTITY_API_VERSION=$OS_IDENTITY_API_VERSION \
+    -e OS_AUTH_PLUGIN=$OS_AUTH_PLUGIN \
+    -v $(pwd):/workspace \
+    -it shreddedbacon/openstack-ansible $@
+}
+
+jumpbox-ip () {
+  EXISTING_IP=$(os-ansible \
+    openstack floating ip list --project ${OPENSTACK_PROJECT_NAME} --tag jumpbox -f json | jq -r '.[] | ."Floating IP Address"')
+  if [ "$EXISTING_IP" == "" ]; then
+    FLOAT_IP_NET=$(bosh int openstack-setup/config.yml --path /jumpbox/floating_ip_net)
+    EXISTING_IP=$(os-ansible \
+      openstack floating ip create --project ${OPENSTACK_PROJECT_NAME} ${FLOAT_IP_NET} \
+        --description jumpbox \
+        --tag jumpbox \
+        -f json | jq -r '.floating_ip_address')
+  fi
+  echo $EXISTING_IP
+}
+
+jumpbox-networkid () {  
+  JUMPBOX_NET_ID=$(os-ansible \
+    openstack network list --project ${OPENSTACK_PROJECT_NAME} --name ${JUMPBOX_NETWORK} -f json | jq -r '.[] | ."ID"')
+  echo $JUMPBOX_NET_ID
+}
+
+jumpbox () {
+  ## unset these before we deploy the jumpbox or BOSH can get confused
+  unset BOSH_ALL_PROXY
+  unset BOSH_ENVIRONMENT
+  unset BOSH_CA_CERT
+  unset BOSH_CLIENT
+  unset BOSH_GW_HOST
+  unset BOSH_GW_USER
+  unset BOSH_CLIENT_SECRET
+  unset BOSH_GW_PRIVATE_KEY
+
+  JUMPBOX_EXTERNAL_IP=$(jumpbox-ip)
+  JUMPBOX_INTERNAL_NET_ID=$(jumpbox-networkid)
+  JUMPBOX_NETWORK_CIDR=$(bosh int openstack-setup/config.yml --path /internal_networks/name=${JUMPBOX_NETWORK}/subnets/name=${JUMPBOX_NETWORK_SUBNET}/cidr)
+  JUMPBOX_NETWORK_GW=$(bosh int openstack-setup/config.yml --path /internal_networks/name=${JUMPBOX_NETWORK}/subnets/name=${JUMPBOX_NETWORK_SUBNET}/gateway)
+  JUMPBOX_SECURITY_GROUP_IDS=()
+  for SG in ${JUMPBOX_SECURITY_GROUPS}
+  do
+  if [ "$SG" != "-" ]; then
+    JUMPBOX_SECURITY_GROUP_IDS=($(os-ansible \
+      openstack security group list --project ${OPENSTACK_PROJECT_NAME} --tags name:$SG -f json | jq -r '.[] | ."ID"') "${JUMPBOX_SECURITY_GROUP_IDS[@]}")
+  fi
+  done
+  JUMPBOX_SEC_GROUPS=$(printf '%s\n' "${JUMPBOX_SECURITY_GROUP_IDS[@]}" | jq -R . | jq -s .)
+echo "External IP: ${JUMPBOX_EXTERNAL_IP}
+Network ID: ${JUMPBOX_INTERNAL_NET_ID}
+Internal IP: ${JUMPBOX_INTERNAL_IP}
+Internal CIDR: ${JUMPBOX_NETWORK_CIDR}
+Internal GW: ${JUMPBOX_NETWORK_GW}
+Security Groups: ${JUMPBOX_SEC_GROUPS}"
+
+  bosh $1-env jumpbox-deployment/jumpbox.yml \
+    -o jumpbox-deployment/openstack/cpi.yml \
+    --state jumpbox-root/state.json \
+    --vars-store jumpbox-root/creds.yml \
+    -v openstack_password=${OS_PASSWORD} \
+    -v openstack_username=${OS_USERNAME} \
+    -v auth_url=${OS_AUTH_URL} \
+    -v openstack_project=${OPENSTACK_PROJECT_NAME} \
+    -v openstack_domain=${OS_PROJECT_DOMAIN_NAME} \
+    -v region=${OS_REGION_NAME} \
+    -v az=${OS_AZ} \
+    -v default_key_name=${GEN_KEYPAIR_NAME} \
+    -v default_security_groups="${JUMPBOX_SEC_GROUPS}" \
+    -v net_id=${JUMPBOX_INTERNAL_NET_ID} \
+    -v internal_cidr=${JUMPBOX_NETWORK_CIDR} \
+    -v internal_gw=${JUMPBOX_NETWORK_GW} \
+    -v internal_ip=${JUMPBOX_INTERNAL_IP} \
+    -v external_ip=${JUMPBOX_EXTERNAL_IP} \
+    --var-file private_key=keypair/${GEN_KEYPAIR_NAME}
+}
+
+
+kubo-stemcell () {
+  bosh upload-stemcell https://bosh-core-stemcells.s3-accelerate.amazonaws.com/621.59/bosh-stemcell-621.59-openstack-kvm-ubuntu-xenial-go_agent.tgz
+}
+
+kubo () {
+  OPENSTACK_PROJECT_ID=$(os-ansible \
+    openstack project list --tags project:${OPENSTACK_PROJECT_NAME} -f json | jq -r '.[] | ."ID"')
+  if [ "$OPENSTACK_PROJECT_ID" != "" ]; then
+  echo "deploying kubo"
+  WORKER_COUNT=$(bosh int openstack-setup/config.yml --path /k8s/worker_count)
+  WORKER_VM_TYPE=$(bosh int openstack-setup/config.yml --path /k8s/worker_vm_type)
+  MASTER_VM_TYPE=$(bosh int openstack-setup/config.yml --path /k8s/master_vm_type)
+  bosh deploy -d cfcr kubo-deployment/manifests/cfcr.yml \
+    -v auth_url=${OS_AUTH_URL} \
+    -v openstack_domain=${OS_PROJECT_DOMAIN_NAME} \
+    -v openstack_password=${OS_PASSWORD} \
+    -v openstack_username=${OS_USERNAME} \
+    -v region=${OS_REGION_NAME} \
+    -v openstack_project_id=${OPENSTACK_PROJECT_ID} \
+    -v worker_count=${WORKER_COUNT} \
+    -v master_vm_type=${MASTER_VM_TYPE} \
+    -v worker_vm_type=${WORKER_VM_TYPE} \
+    -v apply_addons_vm_type=minimal \
+    -o kubo-deployment/manifests/ops-files/iaas/openstack/cloud-provider.yml \
+    -o kubo-deployment/manifests/ops-files/worker_count.yml \
+    -o kubo-deployment/manifests/ops-files/vm-types.yml \
+    -o kubo-ops/alternative-hostnames.yml \
+    -o kubo-ops/loadbalancer.yml
+    # $@
+  fi
+  # -o kubo-ops/alternative-hostnames.yml \
+}
+
+kubo-errands () {
+  bosh -d cfcr run-errand apply-specs
+}
+
+kubo-certs () {
+  credhub find -n cfcr/tls-kube -j | jq -r ".credentials[].name" | xargs -L1 credhub delete -n
+}
+
+bosh-networkid () {  
+  BOSH_NET_ID=$(os-ansible \
+    openstack network list --project ${OPENSTACK_PROJECT_NAME} --name ${BOSH_NETWORK} -f json | jq -r '.[] | ."ID"')
+  echo $BOSH_NET_ID
+}
+
+bucccmd () {
+  BOSH_INTERNAL_NET_ID=$(bosh-networkid)
+  BOSH_NETWORK_CIDR=$(bosh int openstack-setup/config.yml --path /internal_networks/name=${BOSH_NETWORK}/subnets/name=${BOSH_NETWORK_SUBNET}/cidr)
+  BOSH_NETWORK_GW=$(bosh int openstack-setup/config.yml --path /internal_networks/name=${BOSH_NETWORK}/subnets/name=${BOSH_NETWORK_SUBNET}/gateway)
+  BOSH_SECURITY_GROUP_IDS=()
+  for SG in ${JUMPBOX_SECURITY_GROUPS}
+  do
+  if [ "$SG" != "-" ]; then
+    BOSH_SECURITY_GROUP_IDS=($(os-ansible \
+      openstack security group list --project ${OPENSTACK_PROJECT_NAME} --tags name:$SG -f json | jq -r '.[] | ."ID"') "${BOSH_SECURITY_GROUP_IDS[@]}")
+  fi
+  done
+  BOSH_SEC_GROUPS=$(printf ",%s" "${BOSH_SECURITY_GROUP_IDS[@]}")
+  BOSH_SEC_GROUPS=[${BOSH_SEC_GROUPS:1}]
+
+echo "Network ID: ${BOSH_INTERNAL_NET_ID}
+Internal IP: ${BOSH_INTERNAL_IP}
+Internal CIDR: ${BOSH_NETWORK_CIDR}
+Internal GW: ${BOSH_NETWORK_GW}
+Security Groups: ${BOSH_SEC_GROUPS}"
+
+  BOSH_VM_TYPE=$(bosh int openstack-setup/config.yml --path /bosh/vm_type)
+  ## replace these in the vars file for bucc so we can access the director properly
+  ops="${ops}"'- {"type":"replace","path":"/internal_ip","value":"'${BOSH_INTERNAL_IP}'"}\n'
+  ops="${ops}"'- {"type":"replace","path":"/internal_gw","value":"'${BOSH_NETWORK_GW}'"}\n'
+  ops="${ops}"'- {"type":"replace","path":"/internal_cidr","value":"'${BOSH_NETWORK_CIDR}'"}\n'
+  # ops="${ops}"'- {"type":"replace","path":"/alias","value":"'${DIRECTOR_ALIAS}'"}\n'
+  ops="${ops}"'- {"type":"replace","path":"/bosh_alias","value":"'${BOSH_DIRECTOR_ALIAS}'"}\n'
+  ops="${ops}"'- {"type":"replace","path":"/director_name","value":"'${BOSH_DIRECTOR_NAME}'"}\n'
+  ops="${ops}"'- {"type":"replace","path":"/fly_target","value":"'${FLY_TARGET_ALIAS}'"}\n'
+  ops="${ops}"'- {"type":"replace","path":"/instance_type","value":"'${BOSH_VM_TYPE}'"}\n'
+  bosh int "bucc-root/vars.yml" -o <(echo -e $ops) > "bucc-root/vars.yml.tmp"
+  mv "bucc-root/vars.yml.tmp" "bucc-root/vars.yml"
+
+  bucc ${1} --cpi=openstack \
+    --var=openstack_password=${OS_PASSWORD} \
+    --var=openstack_username=${OS_USERNAME} \
+    --var=auth_url=${OS_AUTH_URL} \
+    --var=openstack_project=${OPENSTACK_PROJECT_NAME} \
+    --var=openstack_domain=${OS_PROJECT_DOMAIN_NAME} \
+    --var=region=${OS_REGION_NAME} \
+    --var=az=${OS_AZ} \
+    --var=default_key_name=${GEN_KEYPAIR_NAME} \
+    --var=default_security_groups=${BOSH_SEC_GROUPS} \
+    --var=net_id=${BOSH_INTERNAL_NET_ID} \
+    --var=internal_cidr=${BOSH_NETWORK_CIDR} \
+    --var=internal_gw=${BOSH_NETWORK_GW} \
+    --var=internal_ip=${BOSH_INTERNAL_IP} \
+    --var=instance_type=m1.small \
+    --var-file=private_key=keypair/${GEN_KEYPAIR_NAME}
+}
+
+genkey () {
+  mkdir -p keypair
+  if [ ! -f keypair/${GEN_KEYPAIR_NAME} ]; then
+    echo "Generating new key"
+    ssh-keygen -b 2048 -t rsa -f keypair/${GEN_KEYPAIR_NAME} -q -N "" -C "${GEN_KEYPAIR_NAME}@openstack"
+    cat keypair/${GEN_KEYPAIR_NAME}.pub
+    echo "Adding key to openstack"
+    os-ansible openstack keypair create --public-key keypair/${GEN_KEYPAIR_NAME}.pub ${GEN_KEYPAIR_NAME}
+  else
+    echo "Nothing to do, already created keypair/${GEN_KEYPAIR_NAME}"
+  fi
+}
+
+set-kubo-kubeconfig () {
+  KUBO_LB_NAME=$(bosh int openstack-setup/config.yml --path /k8s/api_loadbalancer_name)
+  KUBO_LB_PORT=$(bosh int openstack-setup/config.yml --path /k8s/api_loadbalancer_port)
+  KUBO_LB_IP=$(os-ansible \
+    openstack floating ip list --project ${OPENSTACK_PROJECT_NAME} --tag lb:${KUBO_LB_NAME} -f json | jq -r '.[] | ."Floating IP Address"')
+  apiserver=https://${KUBO_LB_IP}:${KUBO_LB_PORT}
+
+  ./kubo-deployment/bin/set_kubeconfig ${DIRECTOR_ALIAS}/cfcr $apiserver
+}
+
+get-kubo-token () {
+  if [ -z "$1" ]
+  then
+    kubeconfig=${HOME}/.kube/config
+  else
+    kubeconfig=$1
+  fi
+  # get the secret directly out of kube/config
+  yq r -j $kubeconfig | jq -r '.users[] | select(.name=="cfcr/'${DIRECTOR_ALIAS}'/cfcr/cfcr-admin") | .user.token'
+}
+
+kubo-ip () {
+  KUBO_LB_NAME=$(bosh int openstack-setup/config.yml --path /k8s/api_loadbalancer_name)
+  KUBO_LB_IP=$(os-ansible \
+    openstack floating ip list --project ${OPENSTACK_PROJECT_NAME} --tag lb:${KUBO_LB_NAME} -f json | jq -r '.[] | ."Floating IP Address"')
+  echo $KUBO_LB_IP
+}
+
+case $1 in
+  build)
+    echoerr "Building docker image"
+    build
+    ;;
+  genkey)
+    echoerr "Generating keypair for BOSH"
+    genkey
+    ;;
+  jumpbox)
+    jumpbox $2
+    ;;
+  jumpbox-ip)
+    jumpbox-ip
+    ;;
+  jumpbox-certs)
+    ops="${ops}"'- {"type":"remove","path":"/default_ca"}\n'
+    ops="${ops}"'- {"type":"remove","path":"/mbus_bootstrap_ssl"}\n'
+    bosh int "jumpbox-root/creds.yml" -o <(echo -e $ops) > "jumpbox-root/creds.yml.tmp"
+    mv "jumpbox-root/creds.yml.tmp" "jumpbox-root/creds.yml"
+    ;;
+  bucc)
+    bucccmd $2
+    ;;
+  update-cloud-config)
+    echoerr "Updating cloud configuration on director"
+    bosh -n update-cloud-config bosh-resources/cloud-config.yml
+    ;;
+  update-runtime-config)
+    echoerr "Updating DNS runtime configuration on director"
+    bosh -n update-runtime-config bucc/src/bosh-deployment/runtime-configs/dns.yml
+    ;;
+  kubo-stemcell)
+    kubo-stemcell
+    ;;
+  kubo)
+    echoerr "Deploying k8s"
+    kubo
+    ;;
+  kubo-ip)
+    kubo-ip
+    ;;
+  kubo-errands)
+    kubo-errands
+    ;;
+  kubo-certs)
+    echoerr "Removing certs from credhub for k8s. `./deploy kubo` to regenerate them"
+    kubo-certs
+    ;;
+  destroy-kubo)
+    echoerr "Destroying k8s"
+    bosh delete-deployment -d cfcr $2
+    ;;
+  set-kubo-config)
+    set-kubo-kubeconfig $2
+    ;;
+  get-kubo-token)
+    get-kubo-token $2
+    ;;
+  storage-class)
+    kubectl apply -f kubernetes/openstack-storage-class.yml
+    ;;
+  ingress)
+    kubectl apply -f kubernetes/ingress/ingress-mandatory.yaml
+    HTTP_INGRESS=$(bosh int openstack-setup/config.yml --path /k8s/http_ingress_port)
+    HTTPS_INGRESS=$(bosh int openstack-setup/config.yml --path /k8s/https_ingress_port)
+    ops="${ops}"'- {"type":"replace","path":"/spec/ports/name=http/nodePort","value":'${HTTP_INGRESS}'}\n'
+    ops="${ops}"'- {"type":"replace","path":"/spec/ports/name=https/nodePort","value":'${HTTPS_INGRESS}'}\n'
+    bosh int "kubernetes/ingress/ingress-nodeport.yaml" -o <(echo -e $ops) | kubectl apply -f -
+    ;;
+  cert-manager)
+    kubectl create namespace cert-manager
+    kubectl apply -f kubernetes/cert-manager/cert-manager.yaml
+    kubectl -n cert-manager apply -f kubernetes/cert-manager/letsencrypt-staging.yaml
+    kubectl -n cert-manager apply -f kubernetes/cert-manager/letsencrypt-prod.yaml
+    ;;
+  *)
+    os-ansible $@
+    ;;
+esac

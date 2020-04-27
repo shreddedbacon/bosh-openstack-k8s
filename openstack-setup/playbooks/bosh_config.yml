@@ -1,0 +1,77 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  vars_files:
+    - ../config.yml
+  tasks:
+    - name: get network facts
+      shell: "openstack network list --project {{project.name}} --long -f json"
+      register: os_network_data
+
+    - name: Parse results of network facts
+      set_fact:
+        net_facts: "{{ os_network_data.stdout }}"
+
+    - debug:
+        msg: "{{item['ID']}}-{{item['Name']}}"
+      with_items:
+        - "{{net_facts}}"
+
+    - name: get subnet facts
+      shell: "openstack subnet list --project {{project.name}} --long -f json"
+      register: os_subnet_data
+
+    - name: Parse results of subnet facts
+      set_fact:
+        subnet_facts: "{{ os_subnet_data.stdout }}"
+
+    - debug:
+        msg: "{{item['ID']}}-{{item['Name']}}"
+      with_items:
+        - "{{subnet_facts}}"
+
+    - name: get security group facts
+      shell: "openstack security group list --project {{project.name}} -f json"
+      register: os_security_group_data
+
+    - name: Parse results of security group facts
+      set_fact:
+        sg_facts: "{{ os_security_group_data.stdout }}"
+
+    - debug:
+        msg: "{{item['ID']}}-{{item['Name']}}"
+      with_items:
+        - "{{sg_facts}}"
+
+    - name: get floating ip
+      shell: |
+        EXISTING_IP=$(openstack floating ip list --project {{project.name}} --tag lb:{{item.name}} -f json | jq -r '.[] | ."Floating IP Address"')
+        if [ "$EXISTING_IP" == "" ]; then
+          EXISTING_IP=$(openstack floating ip create --project {{project.name}} {{item.public_network}} \
+              --description lb:{{item.name}} \
+              --tag lb:{{item.name}} \
+              -f json | jq -r '.floating_ip_address')
+        fi
+        echo $EXISTING_IP
+      args:
+        executable: /bin/bash
+      register: loadbalancer_ip_check
+      with_items:
+        - "{{load_balancers}}"
+
+    - name: generate loadbalancer opsfile
+      template:
+        src: ../templates/alternative-hostnames-template.yml
+        dest: ../../kubo-ops/alternative-hostnames.yml
+
+    - name: generate loadbalancer opsfile
+      template:
+        src: ../templates/cloud-config-template.yml
+        dest: ../../bosh-resources/cloud-config.yml
+
+    - name: generate cloudconfig
+      template:
+        src: ../templates/loadbalancer-template.yml
+        dest: ../../kubo-ops/loadbalancer.yml

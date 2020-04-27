@@ -1,0 +1,14 @@
+.envrc
+
+bucc-root/state/*
+bucc-root/vars.yml
+
+jumpbox-root/*
+keypair/*
+
+cloud-config.yml
+openstack-setup/config.yml
+
+bosh-resources/*.yml
+
+kubo-ops/*

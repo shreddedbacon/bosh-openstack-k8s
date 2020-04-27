@@ -1,0 +1,23 @@
+- name: remote_ip_prefix rules
+  os_security_group_rule:
+    auth: "{{auth}}"
+    security_group: "{{source_item.name}}"
+    protocol: "{{item.protocol}}"
+    port_range_min: "{{item.port_range_min}}"
+    port_range_max: "{{item.port_range_max}}"
+    remote_ip_prefix: "{{item.remote_ip_prefix}}"
+  when: item.remote_ip_prefix is defined
+  with_items:
+    - "{{source_item.rules}}"
+
+- name: remote_group rules
+  os_security_group_rule:
+    auth: "{{auth}}"
+    security_group: "{{source_item.name}}"
+    protocol: "{{item.protocol}}"
+    port_range_min: "{{item.port_range_min}}"
+    port_range_max: "{{item.port_range_max}}"
+    remote_group: "{{item.remote_group}}"
+  when: item.remote_group is defined
+  with_items:
+    - "{{source_item.rules}}"

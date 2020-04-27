@@ -1,0 +1,45 @@
+---
+- hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  vars_files:
+    - ../config.yml
+
+  tasks:
+    - name: security groups
+      os_security_group:
+        auth: "{{auth}}"
+        state: present
+        name: "{{item.name}}"
+        description: "{{item.description}}"
+      with_items:
+        - "{{security_groups}}"
+
+    - name: get security group facts
+      shell: "openstack security group list --project {{project.name}} -f json"
+      register: os_security_group_data
+
+    - name: Parse results of security group facts
+      set_fact:
+        sg_facts: "{{ os_security_group_data.stdout }}"
+
+    - debug:
+        msg: "{{item['ID']}}-{{item['Name']}}"
+      with_items:
+        - "{{sg_facts}}"
+
+    - name: tag secruity groups
+      shell: |
+        openstack security group set \
+          --tag project:{{project.name}} \
+          --tag name:{{item['Name']}} \
+          {{item['ID']}}
+      with_items:
+        - "{{sg_facts}}"
+
+    - name: security group rules
+      include_tasks: security_group_rules.yml
+      loop: "{{security_groups}}"
+      loop_control:
+        loop_var: source_item

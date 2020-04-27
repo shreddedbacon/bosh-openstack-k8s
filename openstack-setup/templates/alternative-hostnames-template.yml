@@ -1,0 +1,12 @@
+{% for lbip in loadbalancer_ip_check.results %}
+- type: replace
+  path: /variables/name=tls-kubernetes/options/alternative_names/-
+  value: {{ lbip.stdout }}
+{% endfor %}
+{% for lb in load_balancers %}
+{% if lb.hostname is defined %}
+- type: replace
+  path: /variables/name=tls-kubernetes/options/alternative_names/-
+  value: {{ lb.hostname }}
+{% endif %}
+{% endfor %}
