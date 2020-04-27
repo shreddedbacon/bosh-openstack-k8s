@@ -9,7 +9,7 @@ done
 echoerr() { echo "$@" 1>&2; }
 
 
-if command -v bosh; then
+if command -v bosh >/dev/null 2>&1; then
   OPENSTACK_PROJECT_NAME=$(bosh int openstack-setup/config.yml --path /project/name)
   JUMPBOX_NETWORK=$(bosh int openstack-setup/config.yml --path /jumpbox/network)
   JUMPBOX_NETWORK_SUBNET=$(bosh int openstack-setup/config.yml --path /jumpbox/subnet)
