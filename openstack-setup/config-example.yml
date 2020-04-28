@@ -89,6 +89,7 @@ jumpbox:
   network: k8snet01
   subnet: k8ssub01
   security_groups: [jumpbox, k8s-node]
+  vm_type: m1.small
 
 ##############################################################################
 #

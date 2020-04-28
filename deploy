@@ -91,6 +91,7 @@ jumpbox () {
       openstack security group list --project ${OPENSTACK_PROJECT_NAME} --tags name:$SG -f json | jq -r '.[] | ."ID"') "${JUMPBOX_SECURITY_GROUP_IDS[@]}")
   fi
   done
+  JUMPBOX_VM_TYPE=$(bosh int openstack-setup/config.yml --path /jumpbox/vm_type)
   JUMPBOX_SEC_GROUPS=$(printf '%s\n' "${JUMPBOX_SECURITY_GROUP_IDS[@]}" | jq -R . | jq -s .)
 echo "External IP: ${JUMPBOX_EXTERNAL_IP}
 Network ID: ${JUMPBOX_INTERNAL_NET_ID}
@@ -101,6 +102,7 @@ Security Groups: ${JUMPBOX_SEC_GROUPS}"
 
   bosh $1-env jumpbox-deployment/jumpbox.yml \
     -o jumpbox-deployment/openstack/cpi.yml \
+    -o jumpbox-ops/jumpbox.yml \
     --state jumpbox-root/state.json \
     --vars-store jumpbox-root/creds.yml \
     -v openstack_password=${OS_PASSWORD} \
@@ -117,6 +119,7 @@ Security Groups: ${JUMPBOX_SEC_GROUPS}"
     -v internal_gw=${JUMPBOX_NETWORK_GW} \
     -v internal_ip=${JUMPBOX_INTERNAL_IP} \
     -v external_ip=${JUMPBOX_EXTERNAL_IP} \
+    -v instance_type=${JUMPBOX_VM_TYPE} \
     --var-file private_key=keypair/${GEN_KEYPAIR_NAME}
 }
 
@@ -216,7 +219,6 @@ Security Groups: ${BOSH_SEC_GROUPS}"
     --var=internal_cidr=${BOSH_NETWORK_CIDR} \
     --var=internal_gw=${BOSH_NETWORK_GW} \
     --var=internal_ip=${BOSH_INTERNAL_IP} \
-    --var=instance_type=m1.small \
     --var-file=private_key=keypair/${GEN_KEYPAIR_NAME}
 }
 
